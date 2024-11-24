@@ -1,4 +1,4 @@
-# ESP32 IoT Project
+# CAS CHALLENGE PROJECT
 
 An  application using the ESP32 microcontroller to monitor sensors (e.g., temperature, humidity, light intensity) and control actuators (e.g., servo motors, relays). The project integrates MQTT for remote communication and supports real-time monitoring and control.
 
