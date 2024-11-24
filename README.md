@@ -44,7 +44,7 @@ An  application using the ESP32 microcontroller to monitor sensors (e.g., temper
 ## Installation and Setup
 1. **Clone the Repository**:
    ```bash
-   git clone https://github.com/your-username/esp32-iot-project.git
+   git clone [(https://github.com/m2l33k/CAS-challenge.git)]
    cd esp32-iot-project
 Configure the Project: Edit the src/config.h file to set your Wi-Fi and MQTT broker credentials:
 
