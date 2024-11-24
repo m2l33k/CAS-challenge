@@ -1,0 +1,233 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <DHT.h>
+#include <ESP32Servo.h>
+#include <LiquidCrystal_I2C.h>
+#include <ACS712.h>
+#include <ZMPT101B.h>
+
+// WiFi and MQTT Server Details
+const char* ssid = "Wokwi-GUEST"; // WiFi network SSID
+const char* password = "";        // WiFi network password
+const char* mqtt_server = "test.mosquitto.org"; // Public MQTT broker
+
+// MQTT Topics
+const char* temperatureTopic = "topic/sensor/temperature";
+const char* humidityTopic = "topic/sensor/humidity";
+const char* lightTopic = "topic/sensor/light";
+const char* potTopic = "topic/sensor/pot";
+const char* currentTopic = "topic/sensor/current";
+const char* voltageTopic = "topic/sensor/voltage";
+const char* controlTopic = "Control";
+const char* alertTopic = "topic/sensor/alert";
+const char* tempThresholdTopic = "Control/temperatureThreshold";
+const char* humThresholdTopic = "Control/humidityThreshold";
+
+// Pin Definitions
+#define DHT_PIN 13       // DHT22 connected to GPIO13
+#define LED_PIN 25       // LED connected to GPIO25
+#define PHOTO_PIN 34     // Photoresistor connected to GPIO34 (ADC pin)
+#define SERVO_PIN 26     // Servo motor connected to GPIO26
+#define POT_PIN 35       // Potentiometer connected to GPIO35 (ADC pin)
+#define CURRENT_SENSOR_PIN 32 // ACS712 connected to GPIO32 (ADC pin)
+#define VOLTAGE_SENSOR_PIN 33 // ZMPT101B connected to GPIO33 (ADC pin)
+#define RELAY_PIN 14     // Relay module connected to GPIO14
+
+// Create WiFi and MQTT client instances
+WiFiClient espClient;
+PubSubClient client(espClient);
+DHT dht(DHT_PIN, DHT22);  // Initialize the DHT22 sensor
+Servo servo;
+ACS712 currentSensor(ACS712_30A, CURRENT_SENSOR_PIN); // Initialize the ACS712 current sensor
+ZMPT101B voltageSensor(VOLTAGE_SENSOR_PIN); // Initialize the ZMPT101B voltage sensor
+LiquidCrystal_I2C lcd(0x27, 16, 2); // LCD I2C address 0x27, 16x2 display
+
+// Variables to store sensor values
+float temperature;
+float humidity;
+int lightLevel;
+int potValue;
+float current;
+float voltage;
+float temperatureThreshold = 30.0; // Default temperature threshold
+float humidityThreshold = 60.0;    // Default humidity threshold
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize sensors and actuators
+  dht.begin();  // Initialize DHT22 sensor
+  servo.attach(SERVO_PIN); // Attach the servo to its pin
+  pinMode(LED_PIN, OUTPUT); // Set the LED pin as output
+  pinMode(PHOTO_PIN, INPUT); // Set the photoresistor pin as input
+  pinMode(POT_PIN, INPUT);   // Set the potentiometer pin as input
+  pinMode(RELAY_PIN, OUTPUT); // Set the relay pin as output
+
+  // Initialize LCD
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("Initializing...");
+
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi");
+  lcd.clear();
+  lcd.print("WiFi Connected");
+
+  // Connect to MQTT Broker
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+
+  reconnect(); // Attempt to connect to MQTT broker
+}
+
+void reconnect() {
+  // Loop until reconnected to MQTT broker
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP32Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+      // Once connected, subscribe to control and threshold topics
+      client.subscribe(controlTopic);
+      client.subscribe(tempThresholdTopic);
+      client.subscribe(humThresholdTopic);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" - trying again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  // Handle incoming MQTT messages
+  Serial.print("Message arrived on topic: ");
+  Serial.print(topic);
+  Serial.print(". Message: ");
+  String messageTemp;
+  for (unsigned int i = 0; i < length; i++) {
+    messageTemp += (char)payload[i]; // Convert payload to string
+  }
+  Serial.println(messageTemp);
+
+  String topicStr = String(topic);
+
+  // Handle control messages
+  if (topicStr == controlTopic) {
+    if (messageTemp == "OPEN_SERVO") {
+      servo.write(90); // Open the servo to 90 degrees
+      Serial.println("Servo opened");
+    } else if (messageTemp == "CLOSE_SERVO") {
+      servo.write(0); // Close the servo to 0 degrees
+      Serial.println("Servo closed");
+    } else if (messageTemp == "TURN_ON_LED") {
+      analogWrite(LED_PIN, 255); // Turn on the LED at full brightness
+      Serial.println("LED turned on");
+    } else if (messageTemp == "TURN_OFF_LED") {
+      analogWrite(LED_PIN, 0); // Turn off the LED
+      Serial.println("LED turned off");
+    } else if (messageTemp == "TURN_ON_RELAY") {
+      digitalWrite(RELAY_PIN, HIGH); // Turn on the relay
+      Serial.println("Relay turned on");
+    } else if (messageTemp == "TURN_OFF_RELAY") {
+      digitalWrite(RELAY_PIN, LOW); // Turn off the relay
+      Serial.println("Relay turned off");
+    }
+    // Add other control messages as needed
+  }
+
+  // Handle threshold updates
+  if (topicStr == tempThresholdTopic) {
+    temperatureThreshold = messageTemp.toFloat(); // Update temperature threshold
+    Serial.print("Updated temperature threshold: ");
+    Serial.println(temperatureThreshold);
+  } else if (topicStr == humThresholdTopic) {
+    humidityThreshold = messageTemp.toFloat(); // Update humidity threshold
+    Serial.print("Updated humidity threshold: ");
+    Serial.println(humidityThreshold);
+  }
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect(); // Reconnect if connection to MQTT broker is lost
+  }
+  client.loop(); // Process incoming messages
+
+  // Read sensor data
+  temperature = dht.readTemperature(); // Read temperature from DHT22
+  humidity = dht.readHumidity(); // Read humidity from DHT22
+  lightLevel = analogRead(PHOTO_PIN); // Read light level from photoresistor
+  potValue = analogRead(POT_PIN); // Read potentiometer value
+  current = currentSensor.getCurrentAC(); // Read current from ACS712 sensor
+  voltage = voltageSensor.getVoltage(); // Read voltage from ZMPT101B sensor
+
+  // Control LED brightness using potentiometer value
+  int ledBrightness = map(potValue, 0, 4095, 0, 255); // Map potentiometer value to LED brightness range
+  analogWrite(LED_PIN, ledBrightness); // Set LED brightness
+
+  // Convert sensor data to strings for MQTT publishing
+  String tempString = String(temperature);
+  String humString = String(humidity);
+  String lightString = String(lightLevel);
+  String potString = String(potValue);
+  String currentString = String(current);
+  String voltageString = String(voltage);
+
+  // Publish sensor data to MQTT topics
+  client.publish(temperatureTopic, tempString.c_str()); // Publish temperature data
+  client.publish(humidityTopic, humString.c_str()); // Publish humidity data
+  client.publish(lightTopic, lightString.c_str()); // Publish light level data
+  client.publish(potTopic, potString.c_str()); // Publish potentiometer value
+  client.publish(currentTopic, currentString.c_str()); // Publish current data
+  client.publish(voltageTopic, voltageString.c_str()); // Publish voltage data
+
+  // Update LCD display with temperature and humidity
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Temp: ");
+  lcd.print(tempString);
+  lcd.setCursor(0, 1);
+  lcd.print("Hum: ");
+  lcd.print(humString);
+
+  // Print sensor data to serial monitor for debugging
+  Serial.print("Temperature: ");
+  Serial.println(tempString);
+  Serial.print("Humidity: ");
+  Serial.println(humString);
+  Serial.print("Light Intensity: ");
+  Serial.println(lightString);
+  Serial.print("Potentiometer: ");
+  Serial.println(potString);
+  Serial.print("Current: ");
+  Serial.println(currentString);
+  Serial.print("Voltage: ");
+  Serial.println(voltageString);
+
+  // Check if temperature or humidity exceeds thresholds and publish alert if necessary
+  if (temperature > temperatureThreshold) {
+    const char* alertMessage = "Temperature Alert";
+    client.publish(alertTopic, alertMessage); // Publish temperature alert
+    Serial.println(alertMessage);
+  }
+  if (humidity > humidityThreshold) {
+    const char* alertMessage = "Humidity Alert";
+    client.publish(alertTopic, alertMessage); // Publish humidity alert
+    Serial.println(alertMessage);
+  }
+
+  delay(1000);  // Wait for 1 second before repeating loop
+}
